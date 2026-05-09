@@ -26,27 +26,41 @@ class ArmControllerNode(Node):
     def angle_callback(self, msg):
         human_angle = msg.data
         
-        robot_angle = ((180.0 - human_angle) / 180.0) * math.pi
+        # Map human elbow angle (0-180 deg) to robot elbow joint range (0 to 2.5 rad)
+        # When arm is straight (180 deg), robot elbow is near 0.
+        # When arm is fully bent (0 deg), robot elbow is near 2.5 rad.
+        robot_angle = ((180.0 - human_angle) / 180.0) * 2.5
         robot_angle = max(0.0, min(robot_angle, 2.5))
         
         traj_msg = JointTrajectory()
         
-        # FIXED: Set time to exactly 0 to force immediate execution
-        traj_msg.header.stamp.sec = 0
-        traj_msg.header.stamp.nanosec = 0
+        # FIX 1: Use current ROS time, not zero.
+        # A zero stamp causes joint_trajectory_controller to discard the message
+        # because it interprets it as a command from the past.
+        traj_msg.header.stamp = self.get_clock().now().to_msg()
+        
+        # FIX 2: Set frame_id (required by some controller versions)
+        traj_msg.header.frame_id = ''
         
         traj_msg.joint_names = self.joint_names
         
         point = JointTrajectoryPoint()
         positions = list(self.home_positions)
-        positions[2] = robot_angle  
+        positions[2] = robot_angle  # elbow_joint is index 2
         
         point.positions = positions
-        # Tell the robot to reach the target extremely fast (0.1 seconds)
-        point.time_from_start = Duration(sec=0, nanosec=100000000) 
+        
+        # FIX 3: 0.1s (100ms) is too fast for the controller and may be rejected.
+        # 0.5 seconds is a safe minimum for smooth, accepted trajectories.
+        point.time_from_start = Duration(sec=0, nanosec=500_000_000)  # 0.5 seconds
         
         traj_msg.points = [point]
         self.publisher_.publish(traj_msg)
+        
+        self.get_logger().info(
+            f"Human elbow: {human_angle:.1f}° -> Robot elbow: {math.degrees(robot_angle):.1f}°",
+            throttle_duration_sec=1.0
+        )
 
 def main(args=None):
     rclpy.init(args=args)
