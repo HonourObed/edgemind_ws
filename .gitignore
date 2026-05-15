@@ -1,0 +1,8 @@
+/build/
+/install/
+/log/
+/venv/
+/src/Universal_Robots_ROS2_Description/
+/src/Universal_Robots_ROS2_GZ_Simulation/
+**/__pycache__/
+*.pyc
