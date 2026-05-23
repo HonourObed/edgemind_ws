@@ -3,65 +3,69 @@ from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
+import time
 
 class ArmControllerNode(Node):
     def __init__(self):
         super().__init__('arm_controller')
-        self.subscription = self.create_subscription(Float64MultiArray, '/arm_angles', self.angle_callback, 10)
+        self.subscription = self.create_subscription(Float64MultiArray, '/hand_joystick', self.joy_callback, 10)
         self.publisher_ = self.create_publisher(JointTrajectory, '/joint_trajectory_controller/joint_trajectory', 10)
         
         self.joint_names = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
         
-        # THE PERFECT T-POSE (Robot Home State)
-        # Pan: 90 deg right. Lift: Horizontal. Elbow: Straight. Wrist 1 & 2: Aligned. Wrist 3: Locked.
-        self.home_state = [1.57, 0.0, 0.0, 0.0, 1.57, 0.0]
+        # A proper Crane posture facing forward
+        self.home_state = [0.0, -1.0, 1.57, -1.57, 1.57, 0.0]
         
-        self.smoothed_deltas = [0.0, 0.0, 0.0, 0.0, 0.0]
-        self.alpha = 0.6 # High responsiveness
-        
-        self.get_logger().info("3D Controller Online: Awaiting Delta Telemetry...")
+        self.smoothed_deltas = [0.0, 0.0, 0.0]
+        self.alpha = 0.35 # Increased smoothing
+        self.startup_phase = True
+        self.start_time = 0.0
 
-    def angle_callback(self, msg):
+    def joy_callback(self, msg):
         raw_deltas = msg.data
+        if len(raw_deltas) < 3: return
         
-        # Apply smoothing to the Deltas
-        for i in range(5):
+        if self.startup_phase:
+            if self.start_time == 0.0:
+                self.start_time = time.time()
+                traj_msg = JointTrajectory()
+                traj_msg.joint_names = self.joint_names
+                point = JointTrajectoryPoint()
+                point.positions = self.home_state
+                point.time_from_start = Duration(sec=4, nanosec=0)
+                traj_msg.points = [point]
+                self.publisher_.publish(traj_msg)
+            
+            if time.time() - self.start_time < 4.5:
+                return 
+            else:
+                self.startup_phase = False
+
+        for i in range(3):
             self.smoothed_deltas[i] = (self.alpha * raw_deltas[i]) + ((1.0 - self.alpha) * self.smoothed_deltas[i])
             
-        d_sh_yaw, d_sh_pitch, d_el_pitch, d_wr_pitch, d_wr_yaw = self.smoothed_deltas
+        dx, dy, dz = self.smoothed_deltas
         
-        # TARGET = HOME_STATE + (HUMAN_DELTA * Scaling_Factor)
-        # Note: We invert certain deltas depending on the camera mirror direction
+        # 1. Base Pan
+        target_base = self.home_state[0] - (dx * 2.5) 
+        target_base = max(-1.57, min(target_base, 1.57))
         
-        # 1. Base Pan (Shoulder Yaw)
-        target_base = self.home_state[0] - d_sh_yaw 
-        target_base = max(0.0, min(target_base, 3.14)) # Constrain to the front 180 degrees
+        # 2. Shoulder Lift (FIXED INVERSION: Subtracting dy moves arm UP when hand goes UP)
+        target_lift = self.home_state[1] - (dy * 2.5)
+        target_lift = max(-2.5, min(target_lift, 0.0)) 
         
-        # 2. Shoulder Lift (Shoulder Pitch)
-        target_lift = self.home_state[1] + d_sh_pitch
-        target_lift = max(-1.57, min(target_lift, 1.57)) # Prevent hitting the floor
-        
-        # 3. Elbow Pitch
-        target_elbow = self.home_state[2] + d_el_pitch
-        target_elbow = max(0.0, min(target_elbow, 2.5)) # Standard UR elbow limit
-        
-        # 4. Wrist 1 (Wrist Pitch)
-        target_w1 = self.home_state[3] + d_wr_pitch
-        target_w1 = max(-1.57, min(target_w1, 1.57))
-        
-        # 5. Wrist 2 (Wrist Yaw)
-        target_w2 = self.home_state[4] + d_wr_yaw
-        target_w2 = max(0.0, min(target_w2, 3.14))
+        # 3. Elbow Extension 
+        target_elbow = self.home_state[2] - (dz * 8.0)
+        target_elbow = max(0.5, min(target_elbow, 2.6))
 
-        # Build execution command
         traj_msg = JointTrajectory()
         traj_msg.header.stamp.sec = 0
         traj_msg.header.frame_id = ''
         traj_msg.joint_names = self.joint_names
         
         point = JointTrajectoryPoint()
-        point.positions = [target_base, target_lift, target_elbow, target_w1, target_w2, self.home_state[5]]
-        point.time_from_start = Duration(sec=0, nanosec=150_000_000)
+        point.positions = [target_base, target_lift, target_elbow, -1.57, 1.57, self.home_state[5]]
+        point.time_from_start = Duration(sec=0, nanosec=70_000_000) 
         
         traj_msg.points = [point]
         self.publisher_.publish(traj_msg)

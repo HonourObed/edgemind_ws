@@ -21,10 +21,8 @@ setup(
     entry_points={
         'console_scripts': [
             'arm_controller = hand_teleop.arm_controller:main',
-            'arm_tracker = hand_teleop.arm_tracker_node:main',
             'gripper_bridge = hand_teleop.gripper_bridge:main',
-            'pinch_detector = hand_teleop.tracker_node:main',
-            'unified_vision = hand_teleop.unified_vision_node:main',  # <-- NEW NODE
+            'unified_vision = hand_teleop.unified_vision_node:main',
         ],
     },
 )
